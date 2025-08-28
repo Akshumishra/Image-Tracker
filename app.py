@@ -19,7 +19,7 @@ from reportlab.lib.utils import ImageReader
 # ------------- Configuration --------------------------
 # ======================================================
 
-APP_SECRET = os.environ.get("SECRET_KEY", "dev_secret_change_this")
+app.secret_key = os.environ.get("SECRET_KEY", "fallback_dev_key")
 ADMIN_PASS = os.environ.get("ADMIN_PASS", "admin")
 DB_FILE = os.path.join("generated", "hits.db")  # persistent in Render volume
 OUTDIR = "generated"
