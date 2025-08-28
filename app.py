@@ -18,7 +18,10 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.utils import ImageReader
 
-# ================= Configuration =====================
+# =========================
+# Configuration
+# =========================
+
 APP_SECRET = os.environ.get("SECRET_KEY", "dev_secret_change_this")
 ADMIN_PASS = os.environ.get("ADMIN_PASS", "admin")
 
@@ -37,15 +40,17 @@ limiter = Limiter(
 )
 limiter.init_app(app)
 
-# ================= Database Helpers ==================
+# =========================
+# Database Helpers
+# =========================
+
 def init_db():
-    """Initialize DB and safely upgrade old tables."""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-
-    # Create hits table if not exists
+    # Ensure doc_ref exists
     c.execute('''CREATE TABLE IF NOT EXISTS hits (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        doc_ref TEXT,
         user_id TEXT,
         ip TEXT,
         ua TEXT,
@@ -57,19 +62,11 @@ def init_db():
         country TEXT
     )''')
 
-    # Add doc_ref column if missing
-    c.execute("PRAGMA table_info(hits)")
-    columns = [col[1] for col in c.fetchall()]
-    if "doc_ref" not in columns:
-        c.execute("ALTER TABLE hits ADD COLUMN doc_ref TEXT")
-
-    # Create users table if not exists
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE,
         password TEXT
     )''')
-
     conn.commit()
     conn.close()
 
@@ -98,24 +95,22 @@ def fetch_hits(limit=1000):
 
 init_db()
 
-# ================= Geolocation Helper =================
+# =========================
+# Geolocation Helper
+# =========================
+
 try:
     import geoip2.database
     GEO_DB = geoip2.database.Reader("GeoLite2-City.mmdb")
-
     def geo_ip(ip):
         try:
             r = GEO_DB.city(ip)
-            return (
-                r.location.latitude, r.location.longitude,
-                r.city.name, r.subdivisions.most_specific.name,
-                r.country.name
-            )
+            return r.location.latitude, r.location.longitude, \
+                   r.city.name, r.subdivisions.most_specific.name, r.country.name
         except:
             return None, None, None, None, None
 except ImportError:
     GEO_DB = None
-
     def geo_ip(ip):
         try:
             r = requests.get(
@@ -128,7 +123,10 @@ except ImportError:
             pass
         return None, None, None, None, None
 
-# ================= PDF Helper ========================
+# =========================
+# PDF Helper
+# =========================
+
 def create_pdf_with_clickable_image(image_path: str, pdf_path: str,
                                     page_size=letter, url: str = None):
     c = canvas.Canvas(pdf_path, pagesize=page_size)
@@ -145,17 +143,21 @@ def create_pdf_with_clickable_image(image_path: str, pdf_path: str,
     c.drawImage(img, x, y, draw_w, draw_h, preserveAspectRatio=True, mask='auto')
 
     if url:
-        c.linkURL(url, (x, y, x + draw_w, y + draw_h), relative=0)
+        # Full-page clickable area for mobile-friendly taps
+        c.linkURL(url, (0, 0, width, height), relative=0)
 
     c.showPage()
     c.save()
 
-# ================= Routes ===========================
+# =========================
+# Routes
+# =========================
+
 @app.route("/")
 def index():
     return render_template("index.html", logged_in=session.get("admin", False))
 
-# ----- Admin Login/Logout --------------------------
+# --- Admin Login ---
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
@@ -170,7 +172,7 @@ def logout():
     session.clear()
     return redirect(url_for("index"))
 
-# ----- User Auth -----------------------------------
+# --- User Auth ---
 @app.route("/user_login", methods=["GET", "POST"])
 def user_login():
     if request.method == "POST":
@@ -189,6 +191,7 @@ def user_login():
             return redirect(url_for("index"))
         flash("Invalid username or password", "error")
         return redirect(url_for("user_login"))
+
     return render_template("user_login.html")
 
 @app.route("/register", methods=["GET", "POST"])
@@ -199,7 +202,6 @@ def register():
         if not username or not password:
             flash("Username and password are required.", "error")
             return redirect(url_for("register"))
-
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         try:
@@ -214,7 +216,7 @@ def register():
             conn.close()
     return render_template("register.html")
 
-# ----- File Maker ----------------------------------
+# --- File Maker ---
 @app.route("/make", methods=["GET", "POST"])
 def make():
     if not session.get("admin"):
@@ -224,11 +226,13 @@ def make():
         mode = request.form.get("mode", "png")
         file = request.files.get("image")
         base_image = Image.open(file.stream).convert("RGBA") if file and file.filename else None
+
         doc_ref = shortuuid.uuid()[:8]
 
+        # SVG Mode
         if mode == "svg":
             url = url_for("clickable_redirect", doc_ref=doc_ref, _external=True)
-            svg_content = f'''<?xml version="1.0" encoding="utf-8"?>
+            svg = f'''<?xml version="1.0" encoding="utf-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="800" height="600">
   <rect width="100%" height="100%" fill="#fff"/>
   <text x="10" y="20" font-size="14">Document Ref: {doc_ref}</text>
@@ -236,23 +240,23 @@ def make():
 </svg>'''
             fname = f"document_{doc_ref}.svg"
             with open(os.path.join(OUTDIR, fname), "w", encoding="utf-8") as f:
-                f.write(svg_content)
+                f.write(svg)
             return render_template("made_file.html",
                                    doc_ref=doc_ref,
                                    file_url=url_for("download_generated", name=fname, _external=True),
                                    file_kind="SVG",
                                    pdf_url=None)
 
-        # PNG + PDF mode
+        # PNG Mode
         fname = f"document_{doc_ref}.png"
         fpath = os.path.join(OUTDIR, fname)
         if base_image is None:
             base_image = Image.new("RGBA", (800, 600), (255, 255, 255, 255))
         base_image.save(fpath, "PNG")
 
+        url = url_for('clickable_redirect', doc_ref=doc_ref, _external=True)
         pdf_name = f"document_{doc_ref}.pdf"
         pdf_path = os.path.join(OUTDIR, pdf_name)
-        url = url_for("clickable_redirect", doc_ref=doc_ref, _external=True)
         create_pdf_with_clickable_image(fpath, pdf_path, page_size=letter, url=url)
 
         return render_template("made_file.html",
@@ -261,71 +265,59 @@ def make():
                                file_kind="PNG",
                                pdf_url=url_for("download_generated", name=pdf_name, _external=True),
                                dl_pdf_url=url_for("dl_pdf", doc_ref=doc_ref, pdfname=pdf_name, _external=True))
+
     return render_template("make.html")
 
-# ----- Clickable Redirect -------------------------
+# --- Clickable Redirect ---
 @app.route("/click/<doc_ref>")
 @limiter.limit("60 per minute")
 def clickable_redirect(doc_ref):
-    try:
-        ip = request.headers.get("X-Forwarded-For", request.remote_addr).split(",")[0].strip()
-        ua = request.headers.get("User-Agent", "")
-        lat, lon, city, region, country = geo_ip(ip)
-        user_id = session.get("user_id", "anonymous")
-        insert_hit(doc_ref, user_id, ip, ua, lat, lon, city, region, country)
-    except Exception as e:
-        print(f"Error logging click: {e}")  # silently ignore DB errors
-    return redirect("https://your-site.com/thank-you")
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr).split(",")[0].strip()
+    ua = request.headers.get("User-Agent", "")
+    lat, lon, city, region, country = geo_ip(ip)
+    user_id = session.get("user_id", "anonymous")
+    insert_hit(doc_ref, user_id, ip, ua, lat, lon, city, region, country)
+    # Redirect to a friendly page
+    return redirect("https://your-site.com/thank-you")  # replace with real page
 
-# ----- Downloads -----------------------------------
+# --- Download PDF ---
 @app.route("/dl_pdf/<doc_ref>/<pdfname>")
 def dl_pdf(doc_ref, pdfname):
-    try:
-        ip = request.headers.get("X-Forwarded-For", request.remote_addr).split(",")[0].strip()
-        ua = request.headers.get("User-Agent", "")
-        lat, lon, city, region, country = geo_ip(ip)
-        user_id = session.get("user_id", "anonymous")
-        insert_hit(doc_ref, user_id, ip, ua, lat, lon, city, region, country)
-    except Exception as e:
-        print(f"Error logging download: {e}")
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr).split(",")[0].strip()
+    ua = request.headers.get("User-Agent", "")
+    lat, lon, city, region, country = geo_ip(ip)
+    user_id = session.get("user_id", "anonymous")
+    insert_hit(doc_ref, user_id, ip, ua, lat, lon, city, region, country)
+
     path = os.path.join(OUTDIR, pdfname)
     if not os.path.exists(path):
         return "Not found", 404
     return send_file(path, as_attachment=True, download_name=pdfname, mimetype="application/pdf")
 
+# --- Download Generated Files ---
 @app.route("/download_generated/<name>")
 def download_generated(name):
     path = os.path.join(OUTDIR, name)
     if not os.path.exists(path):
         return "Not found", 404
-
     ext = name.lower().split(".")[-1]
-    mime_map = {
-        "svg": "image/svg+xml",
-        "png": "image/png",
-        "html": "text/html",
-        "pdf": "application/pdf"
-    }
-    mt = mime_map.get(ext, "application/octet-stream")
-    return send_file(path, as_attachment=True, download_name=name, mimetype=mt)
+    mime_map = {"svg":"image/svg+xml","png":"image/png","html":"text/html","pdf":"application/pdf"}
+    return send_file(path, as_attachment=True, download_name=name, mimetype=mime_map.get(ext,"application/octet-stream"))
 
-# ----- Logs ---------------------------------------
+# --- Admin Logs ---
 @app.route("/logs")
 def logs():
     if not session.get("admin"):
         return redirect(url_for("login"))
-
     rows = fetch_hits()
     safe_rows = [
-        {
-            "id": r[0], "doc_ref": r[1], "user_id": r[2],
-            "ip": r[3], "ua": r[4], "ts": r[5],
-            "lat": float(r[6]) if r[6] is not None else "N/A",
-            "lon": float(r[7]) if r[7] is not None else "N/A",
-            "city": r[8] if r[8] else "N/A",
-            "region": r[9] if r[9] else "N/A",
-            "country": r[10] if r[10] else "N/A"
-        }
+        {"id": r[0], "doc_ref": r[1], "user_id": r[2],
+         "ip": r[3], "ua": r[4], "ts": r[5],
+         "lat": r[6] if r[6] else "N/A",
+         "lon": r[7] if r[7] else "N/A",
+         "city": r[8] or "N/A",
+         "region": r[9] or "N/A",
+         "country": r[10] or "N/A"}
         for r in rows
     ]
     return render_template("logs.html", table_data=safe_rows)
@@ -335,17 +327,15 @@ def api_logs():
     if not session.get("admin"):
         return jsonify({"error": "auth required"}), 401
     rows = fetch_hits()
-    out = [
-        {
-            "id": r[0], "doc_ref": r[1], "user_id": r[2],
+    out = [{"id": r[0], "doc_ref": r[1], "user_id": r[2],
             "ip": r[3], "ua": r[4], "ts": r[5],
             "lat": r[6], "lon": r[7], "city": r[8],
-            "region": r[9], "country": r[10]
-        }
-        for r in rows
-    ]
+            "region": r[9], "country": r[10]} for r in rows]
     return jsonify(out)
 
-# ================= Run App ===========================
+# =========================
+# Run App
+# =========================
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
