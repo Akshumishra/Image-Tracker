@@ -12,3 +12,4 @@ geoip2
 gunicorn
 flask
 flask-limiter
+Werkzeug
