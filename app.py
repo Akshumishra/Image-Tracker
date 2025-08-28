@@ -4,7 +4,6 @@ import datetime
 import shortuuid
 import requests
 from PIL import Image
-
 from flask import (
     Flask, render_template, request, redirect, url_for,
     send_file, jsonify, session, flash
@@ -12,21 +11,17 @@ from flask import (
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-
-# PDF utils
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.utils import ImageReader
 
-# ======================================================
-# ------------- Configuration --------------------------
-# ======================================================
-
+# ================= Configuration ===================
 APP_SECRET = os.environ.get("SECRET_KEY", "dev_secret_change_this")
 ADMIN_PASS = os.environ.get("ADMIN_PASS", "admin")
 
-DB_FILE = os.environ.get("DB_FILE", "/tmp/hits.db")
-OUTDIR = os.environ.get("OUTDIR", "/tmp/generated")
+# Use /tmp for Render
+DB_FILE = os.path.join("/tmp", "hits.db")
+OUTDIR = os.path.join("/tmp", "generated")
 os.makedirs(OUTDIR, exist_ok=True)
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -40,10 +35,7 @@ limiter = Limiter(
 )
 limiter.init_app(app)
 
-# ======================================================
-# ------------- Database Helpers -----------------------
-# ======================================================
-
+# ================= Database Helpers ===================
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -68,7 +60,8 @@ def init_db():
     conn.commit()
     conn.close()
 
-def insert_hit(doc_ref, user_id, ip, ua, lat=None, lon=None, city=None, region=None, country=None):
+def insert_hit(doc_ref, user_id, ip, ua, lat=None, lon=None,
+               city=None, region=None, country=None):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''INSERT INTO hits
@@ -93,10 +86,7 @@ def fetch_hits(limit=1000):
 
 init_db()
 
-# ======================================================
-# ------------- Geolocation Helper ---------------------
-# ======================================================
-
+# ================= Geo Helper ===================
 try:
     import geoip2.database
     GEO_DB = geoip2.database.Reader("GeoLite2-City.mmdb")
@@ -105,7 +95,7 @@ try:
         try:
             r = GEO_DB.city(ip)
             return r.location.latitude, r.location.longitude, r.city.name, r.subdivisions.most_specific.name, r.country.name
-        except Exception:
+        except:
             return None, None, None, None, None
 except ImportError:
     GEO_DB = None
@@ -115,17 +105,15 @@ except ImportError:
             j = r.json()
             if j.get("status") == "success":
                 return j.get("lat"), j.get("lon"), j.get("city"), j.get("regionName"), j.get("country")
-        except Exception:
+        except:
             pass
         return None, None, None, None, None
 
-# ======================================================
-# ------------- PDF Helper -----------------------------
-# ======================================================
-
+# ================= PDF Helper ===================
 def create_pdf_with_clickable_image(image_path: str, pdf_path: str, page_size=letter, url: str = None):
     c = canvas.Canvas(pdf_path, pagesize=page_size)
     width, height = page_size
+
     img = ImageReader(image_path)
     iw, ih = img.getSize()
     margin = 36
@@ -135,20 +123,18 @@ def create_pdf_with_clickable_image(image_path: str, pdf_path: str, page_size=le
     x = (width - draw_w) / 2
     y = (height - draw_h) / 2
     c.drawImage(img, x, y, draw_w, draw_h, preserveAspectRatio=True, mask='auto')
+
     if url:
         c.linkURL(url, (x, y, x + draw_w, y + draw_h), relative=0)
+
     c.showPage()
     c.save()
 
-# ======================================================
-# ------------- Routes ---------------------------------
-# ======================================================
-
+# ================= Routes ===================
 @app.route("/")
 def index():
     return render_template("index.html", logged_in=session.get("admin", False))
 
-# ------------------- Admin Login ----------------------
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
@@ -163,7 +149,6 @@ def logout():
     session.clear()
     return redirect(url_for("index"))
 
-# ------------------- User Auth ------------------------
 @app.route("/user_login", methods=["GET", "POST"])
 def user_login():
     if request.method == "POST":
@@ -179,8 +164,9 @@ def user_login():
             session["username"] = username
             flash(f"Welcome back, {username}!", "success")
             return redirect(url_for("index"))
-        flash("Invalid username or password", "error")
-        return redirect(url_for("user_login"))
+        else:
+            flash("Invalid username or password", "error")
+            return redirect(url_for("user_login"))
     return render_template("user_login.html")
 
 @app.route("/register", methods=["GET", "POST"])
@@ -205,7 +191,6 @@ def register():
             conn.close()
     return render_template("register.html")
 
-# ------------------- File Maker -----------------------
 @app.route("/make", methods=["GET", "POST"])
 def make():
     if not session.get("admin"):
@@ -233,6 +218,7 @@ def make():
                                    file_kind="SVG",
                                    pdf_url=None)
 
+        # PNG Mode
         fname = f"document_{doc_ref}.png"
         fpath = os.path.join(OUTDIR, fname)
         if base_image is None:
@@ -252,7 +238,6 @@ def make():
                                dl_pdf_url=url_for("dl_pdf", doc_ref=doc_ref, pdfname=pdf_name, _external=True))
     return render_template("make.html")
 
-# ------------------- Clickable Redirect ----------------
 @app.route("/click/<doc_ref>")
 @limiter.limit("60 per minute")
 def clickable_redirect(doc_ref):
@@ -261,9 +246,8 @@ def clickable_redirect(doc_ref):
     lat, lon, city, region, country = geo_ip(ip)
     user_id = session.get("user_id", "anonymous")
     insert_hit(doc_ref, user_id, ip, ua, lat, lon, city, region, country)
-    return redirect("https://your-site.com/thank-you")  # replace with your page
+    return redirect("https://your-site.com/thank-you")
 
-# ------------------- Downloads ------------------------
 @app.route("/dl_pdf/<doc_ref>/<pdfname>")
 def dl_pdf(doc_ref, pdfname):
     ip = request.headers.get("X-Forwarded-For", request.remote_addr).split(",")[0].strip()
@@ -282,18 +266,16 @@ def download_generated(name):
     if not os.path.exists(path):
         return "Not found", 404
     ext = name.lower().split(".")[-1]
-    mime_map = {"svg":"image/svg+xml","png":"image/png","html":"text/html","pdf":"application/pdf"}
+    mime_map = {"svg": "image/svg+xml", "png": "image/png", "html": "text/html", "pdf": "application/pdf"}
     mt = mime_map.get(ext, "application/octet-stream")
     return send_file(path, as_attachment=True, download_name=name, mimetype=mt)
 
-# ------------------- Logs -----------------------------
 @app.route("/logs")
 def logs():
     if not session.get("admin"):
         return redirect(url_for("login"))
     rows = fetch_hits()
-    safe_rows = [{"id": r[0], "doc_ref": r[1], "user_id": r[2],
-                  "ip": r[3], "ua": r[4], "ts": r[5],
+    safe_rows = [{"id": r[0], "doc_ref": r[1], "user_id": r[2], "ip": r[3], "ua": r[4], "ts": r[5],
                   "lat": float(r[6]) if r[6] is not None else "N/A",
                   "lon": float(r[7]) if r[7] is not None else "N/A",
                   "city": r[8] or "N/A", "region": r[9] or "N/A", "country": r[10] or "N/A"} for r in rows]
@@ -304,14 +286,9 @@ def api_logs():
     if not session.get("admin"):
         return jsonify({"error": "auth required"}), 401
     rows = fetch_hits()
-    out = [{"id": r[0], "doc_ref": r[1], "user_id": r[2],
-            "ip": r[3], "ua": r[4], "ts": r[5],
-            "lat": r[6], "lon": r[7], "city": r[8], "region": r[9], "country": r[10]} for r in rows]
+    out = [{"id": r[0], "doc_ref": r[1], "user_id": r[2], "ip": r[3], "ua": r[4],
+            "ts": r[5], "lat": r[6], "lon": r[7], "city": r[8], "region": r[9], "country": r[10]} for r in rows]
     return jsonify(out)
 
-# ======================================================
-# ------------- Run App (dev only) --------------------
-# ======================================================
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+# ================= Render Production ===================
+# No app.run() here, Gunicorn handles it
