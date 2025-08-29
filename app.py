@@ -26,6 +26,9 @@ os.makedirs(OUTDIR, exist_ok=True)
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = os.environ.get("SECRET_KEY", "0dfa3925ee9eaa47254d57543825fdbdefbae718afe9e368790086cbccc9acdd")
+# app.py (after app = Flask(...))
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
 # Rate limiting
 limiter = Limiter(key_func=get_remote_address, default_limits=["2000/day","200/hour"])
