@@ -73,7 +73,7 @@ def insert_hit(doc_ref, user_id, ip, ua, lat=None, lon=None, city=None, region=N
     c.execute('''
         INSERT INTO hits (doc_ref, user_id, ip, ua, ts, lat, lon, city, region, country)
         VALUES (?,?,?,?,?,?,?,?,?,?)
-    ''', (doc_ref, user_id, ip, ua, datetime.datetime.utcnow().isoformat()+"Z", lat, lon, city, region, country))
+    ''', (doc_ref, user_id, ip, ua, datetime.datetime.now().isoformat()+"Z", lat, lon, city, region, country))
     conn.commit()
     conn.close()
 

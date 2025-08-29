@@ -26,20 +26,21 @@
     </thead>
     <tbody>
       {% for row in table_data %}
-      <tr>
-        <td>{{ loop.revindex }}</td>
-        <td>{{ row.track_id }}</td>
-        {% if is_admin %}<td>{{ row.user_id }}</td>{% endif %}
-        <td>{{ row.ip }}</td>
-        <td>{{ row.ua }}</td>
-        <td>{{ row.ts }}</td>
-        <td>{{ row.city }}</td>
-        <td>{{ row.region }}</td>
-        <td>{{ row.country }}</td>
-        <td>{{ row.lat }}</td>
-        <td>{{ row.lon }}</td>
-      </tr>
-      {% endfor %}
+<tr>
+  <td>{{ loop.revindex }}</td>
+  <td>{{ row[1] }}</td>  {# doc_ref #}
+  {% if is_admin %}<td>{{ row[2] }}</td>{% endif %}
+  <td>{{ row[3] }}</td>  {# ip #}
+  <td>{{ row[4] }}</td>  {# ua #}
+  <td>{{ row[5] }}</td>  {# ts #}
+  <td>{{ row[8] }}</td>  {# city #}
+  <td>{{ row[9] }}</td>  {# region #}
+  <td>{{ row[10] }}</td> {# country #}
+  <td>{{ row[6] }}</td>  {# lat #}
+  <td>{{ row[7] }}</td>  {# lon #}
+</tr>
+{% endfor %}
+
     </tbody>
   </table>
 </div>
