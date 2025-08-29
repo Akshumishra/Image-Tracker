@@ -6,7 +6,7 @@ import requests
 from PIL import Image
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    send_file, jsonify, session, flash
+    send_file, session, flash
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_limiter import Limiter
@@ -19,14 +19,13 @@ from reportlab.lib.utils import ImageReader
 # ------------- Configuration --------------------------
 # ======================================================
 
-app.secret_key = os.environ.get("SECRET_KEY", "dev_secret_change_this")
 ADMIN_PASS = os.environ.get("ADMIN_PASS", "admin")
-DB_FILE = os.path.join("generated", "hits.db")  # persistent in Render volume
+DB_FILE = os.path.join("generated", "hits.db")
 OUTDIR = "generated"
 os.makedirs(OUTDIR, exist_ok=True)
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
-app.config["SECRET_KEY"] = APP_SECRET
+app.secret_key = os.environ.get("SECRET_KEY", "0dfa3925ee9eaa47254d57543825fdbdefbae718afe9e368790086cbccc9acdd")
 
 # Rate limiting
 limiter = Limiter(key_func=get_remote_address, default_limits=["2000/day","200/hour"])
@@ -42,7 +41,6 @@ def get_conn():
 def init_db():
     conn = get_conn()
     c = conn.cursor()
-    # Hits table
     c.execute('''
     CREATE TABLE IF NOT EXISTS hits (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,7 +55,6 @@ def init_db():
         region TEXT,
         country TEXT
     )''')
-    # Users table
     c.execute('''
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,7 +70,7 @@ def insert_hit(doc_ref, user_id, ip, ua, lat=None, lon=None, city=None, region=N
     c.execute('''
         INSERT INTO hits (doc_ref, user_id, ip, ua, ts, lat, lon, city, region, country)
         VALUES (?,?,?,?,?,?,?,?,?,?)
-    ''', (doc_ref,user_id,ip,ua,datetime.datetime.utcnow().isoformat()+"Z",lat,lon,city,region,country))
+    ''', (doc_ref, user_id, ip, ua, datetime.datetime.utcnow().isoformat()+"Z", lat, lon, city, region, country))
     conn.commit()
     conn.close()
 
@@ -127,44 +124,97 @@ def create_pdf_with_clickable_image(image_path: str, pdf_path: str, page_size=le
 
 @app.route("/")
 def index():
-    return render_template("index.html", logged_in=session.get("admin", False))
+    return render_template("index.html")
 
-@app.route("/login", methods=["GET","POST"])
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if request.method == "POST":
+        username = request.form.get("username").strip()
+        password = request.form.get("password")
+        confirm = request.form.get("confirm")
+
+        if not username or not password:
+            flash("All fields are required.", "error")
+            return redirect(url_for("register"))
+
+        if password != confirm:
+            flash("Passwords do not match.", "error")
+            return redirect(url_for("register"))
+
+        hashed_pw = generate_password_hash(password)
+
+        try:
+            conn = get_conn()
+            c = conn.cursor()
+            c.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, hashed_pw))
+            conn.commit()
+            conn.close()
+        except sqlite3.IntegrityError:
+            flash("Username already taken.", "error")
+            return redirect(url_for("register"))
+
+        flash("Registration successful. Please log in.", "success")
+        return redirect(url_for("login"))
+
+    return render_template("register.html")
+
+@app.route("/login", methods=["GET", "POST"])
 def login():
-    if request.method=="POST":
-        if request.form.get("password","") == ADMIN_PASS:
+    if request.method == "POST":
+        username = request.form.get("username", "").strip().lower()
+        password = request.form.get("password", "")
+
+        # Admin login
+        if username == "admin" and password == ADMIN_PASS:
+            session.clear()
             session["admin"] = True
+            session["username"] = "admin"
+            flash("Logged in as admin.", "success")
             return redirect(url_for("make"))
-        flash("Wrong password","error")
+
+        # Normal user login
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT id, password FROM users WHERE username = ?", (username,))
+        user = c.fetchone()
+        conn.close()
+
+        if user and check_password_hash(user[1], password):
+            session.clear()
+            session["user_id"] = user[0]
+            session["username"] = username
+            flash("Logged in successfully.", "success")
+            return redirect(url_for("make"))
+
+        flash("Invalid username or password.", "error")
+        return redirect(url_for("login"))
+
     return render_template("login.html")
 
 @app.route("/logout")
 def logout():
     session.clear()
+    flash("You have been logged out.", "info")
     return redirect(url_for("index"))
-
-# User registration/login routes with SQLite (same as previous code)
 
 @app.route("/make", methods=["GET","POST"])
 def make():
-    if not session.get("admin"):
+    if not (session.get("admin") or session.get("user_id")):
         return redirect(url_for("login"))
-    if request.method=="POST":
-        mode = request.form.get("mode","png")
+
+    if request.method == "POST":
         file = request.files.get("image")
         base_image = Image.open(file.stream).convert("RGBA") if file and file.filename else Image.new("RGBA",(800,600),(255,255,255,255))
         doc_ref = shortuuid.uuid()[:8]
 
-        # Save image
         fname = f"document_{doc_ref}.png"
         fpath = os.path.join(OUTDIR,fname)
         base_image.save(fpath,"PNG")
 
-        # Create PDF
         url = url_for('clickable_redirect', doc_ref=doc_ref, _external=True)
         pdf_name = f"document_{doc_ref}.pdf"
         pdf_path = os.path.join(OUTDIR,pdf_name)
-        create_pdf_with_clickable_image(fpath,pdf_path,url=url)
+        create_pdf_with_clickable_image(fpath, pdf_path, url=url)
 
         return render_template("made_file.html",
                                doc_ref=doc_ref,
@@ -207,9 +257,19 @@ def download_generated(name):
 
 @app.route("/logs")
 def logs():
-    if not session.get("admin"):
+    if not (session.get("admin") or session.get("user_id")):
         return redirect(url_for("login"))
-    rows = fetch_hits()
+
+    if session.get("admin"):
+        rows = fetch_hits()
+    else:
+        user_id = session.get("user_id")
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT * FROM hits WHERE user_id = ? ORDER BY id DESC LIMIT 1000", (user_id,))
+        rows = c.fetchall()
+        conn.close()
+
     return render_template("logs.html", table_data=rows)
 
 # ======================================================
@@ -217,4 +277,4 @@ def logs():
 # ======================================================
 
 if __name__=="__main__":
-    app.run(host="0.0.0.0",port=5000)
+    app.run(host="0.0.0.0",port=5000, debug=True)
