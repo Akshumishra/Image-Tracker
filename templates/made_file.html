@@ -2,7 +2,7 @@
 {% block content %}
 <h2>{{ file_kind }} generated</h2>
 <div class="card">
-  <p><strong>Track ID:</strong> {{ track_id }}</p>
+  <p><strong>Track ID:</strong> {{ doc_ref  }}</p>
   <p><a class="btn" href="{{ file_url }}">Download {{ file_kind }}</a></p>
   <p><a class="btn" href="{{ wrapper_url }}">Download HTML Wrapper</a></p>
   {% if pdf_url %}
